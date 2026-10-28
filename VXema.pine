@@ -1,0 +1,237 @@
+//@version=6
+// VXema — one EMA length, drawn for as many timeframes as you tick, all on one chart.
+//
+// Above the chart timeframe, each line is the REAL EMA of its timeframe, pulled from
+// that timeframe's own series. Not a length-scaled approximation: a 1h EMA 200 as a
+// 12000-length EMA of 1m bars would need 12000 chart candles, and the chart loads 5000.
+// The 1h series carries its own history, so 200 of its bars are always there.
+//
+// Below the chart timeframe there is no series to pull — the detail is already gone from
+// the candles — so the length is scaled down instead: divide by the timeframe ratio and
+// round. A 15m EMA 200 seen on a 4h chart is 200 / 16 = 12.5, drawn as a 13-length EMA.
+//
+// Smoothing: a confirmed HTF value steps once per HTF bar, a visible staircase on a low
+// chart timeframe. Each line is therefore run at chart resolution with that EMA's own
+// time constant — 1000 bars for a 5m EMA 200 on a 1m chart — and seeded from the HTF
+// series so it starts converged. Same smoothing period, every chart close feeding it,
+// nothing filtered after the fact. See TT_DET.
+indicator("VXema", "VXema", overlay = true, max_labels_count = 50)
+
+// ─── Core ───────────────────────────────────────────────────────────────────
+TT_LEN  = "Applied to every timeframe you tick, as that timeframe sees it. Length 200 with 15m and 1h ticked gives you the real 15m EMA 200 and 1h EMA 200, both drawn on this chart."
+TT_DET  = "Smooth (default): the same EMA re-expressed at this chart's resolution — a 5m EMA 200 on a 1m chart is a 1000-length EMA of 1m closes. Identical time constant, fed every chart bar instead of one close per HTF bar, so it is more information rather than less. It is NOT a filter run over the stepped line; nothing is averaged away. Started from the HTF series' own converged value, so it is correct from the first bar even though a 12000-length EMA could never warm up inside 5000 candles.\n\nStepped: the literal HTF value, which only changes once per HTF bar and therefore looks like stairs on a low chart timeframe. Never repaints. Use it if you need a line that holds perfectly flat between HTF closes."
+
+len    = input.int(200, "EMA length", minval = 1, tooltip = TT_LEN)
+src    = input(close, "Source", display = display.none)
+detail = input.string("Smooth", "Line detail", options = ["Smooth", "Stepped"], tooltip = TT_DET, display = display.none)
+
+// ─── Timeframes ─────────────────────────────────────────────────────────────
+g = "Timeframes"
+TT_ROW = "Enable · line colour · line style · line thickness."
+TT_LOW = "What to do with a ticked timeframe below the chart's own.\n\nScale down: redraw it at this chart's resolution — divide the length by the timeframe ratio and round. A 15m EMA 200 on a 4h chart is 200 / 16 = 12.5, so a 13-length EMA. Its label shows the effective length in brackets.\n\nHide: leave it off the chart."
+
+lowMode = input.string("Scale down", "Timeframes below chart TF", options = ["Scale down", "Hide"], group = g, tooltip = TT_LOW, display = display.none)
+
+eC = input.bool (false, "Chart", group = g, inline = "c")
+cC = input.color(#787b86, "", group = g, inline = "c")
+yC = input.string("Solid", "", options = ["Solid", "Dashed", "Dotted"], group = g, inline = "c", tooltip = "Follows whatever timeframe the chart is on.", display = display.none)
+wC = input.int(2, "", minval = 1, maxval = 5, group = g, inline = "c", display = display.none)
+e1 = input.bool (false, "1m",  group = g, inline = "t1")
+c1 = input.color(#42bda8, "", group = g, inline = "t1")
+y1 = input.string("Solid", "", options = ["Solid", "Dashed", "Dotted"], group = g, inline = "t1", tooltip = TT_ROW, display = display.none)
+w1 = input.int(2, "", minval = 1, maxval = 5, group = g, inline = "t1", display = display.none)
+e3 = input.bool (false, "3m",  group = g, inline = "t3")
+c3 = input.color(#26a69a, "", group = g, inline = "t3")
+y3 = input.string("Solid", "", options = ["Solid", "Dashed", "Dotted"], group = g, inline = "t3", tooltip = TT_ROW, display = display.none)
+w3 = input.int(2, "", minval = 1, maxval = 5, group = g, inline = "t3", display = display.none)
+e5 = input.bool (false, "5m",  group = g, inline = "t5")
+c5 = input.color(#2962ff, "", group = g, inline = "t5")
+y5 = input.string("Solid", "", options = ["Solid", "Dashed", "Dotted"], group = g, inline = "t5", tooltip = TT_ROW, display = display.none)
+w5 = input.int(2, "", minval = 1, maxval = 5, group = g, inline = "t5", display = display.none)
+e10 = input.bool (false, "10m", group = g, inline = "t10")
+c10 = input.color(#7e57c2, "", group = g, inline = "t10")
+y10 = input.string("Solid", "", options = ["Solid", "Dashed", "Dotted"], group = g, inline = "t10", tooltip = TT_ROW, display = display.none)
+w10 = input.int(2, "", minval = 1, maxval = 5, group = g, inline = "t10", display = display.none)
+e15 = input.bool (true,  "15m", group = g, inline = "t15")
+c15 = input.color(#ff9800, "", group = g, inline = "t15")
+y15 = input.string("Solid", "", options = ["Solid", "Dashed", "Dotted"], group = g, inline = "t15", tooltip = TT_ROW, display = display.none)
+w15 = input.int(2, "", minval = 1, maxval = 5, group = g, inline = "t15", display = display.none)
+e30 = input.bool (false, "30m", group = g, inline = "t30")
+c30 = input.color(#ef5350, "", group = g, inline = "t30")
+y30 = input.string("Solid", "", options = ["Solid", "Dashed", "Dotted"], group = g, inline = "t30", tooltip = TT_ROW, display = display.none)
+w30 = input.int(2, "", minval = 1, maxval = 5, group = g, inline = "t30", display = display.none)
+e60 = input.bool (true,  "1h",  group = g, inline = "t60")
+c60 = input.color(#f23645, "", group = g, inline = "t60")
+y60 = input.string("Solid", "", options = ["Solid", "Dashed", "Dotted"], group = g, inline = "t60", tooltip = TT_ROW, display = display.none)
+w60 = input.int(2, "", minval = 1, maxval = 5, group = g, inline = "t60", display = display.none)
+e120 = input.bool (false, "2h",  group = g, inline = "t120")
+c120 = input.color(#e040fb, "", group = g, inline = "t120")
+y120 = input.string("Solid", "", options = ["Solid", "Dashed", "Dotted"], group = g, inline = "t120", tooltip = TT_ROW, display = display.none)
+w120 = input.int(2, "", minval = 1, maxval = 5, group = g, inline = "t120", display = display.none)
+e240 = input.bool (false, "4h",  group = g, inline = "t240")
+c240 = input.color(#ffeb3b, "", group = g, inline = "t240")
+y240 = input.string("Solid", "", options = ["Solid", "Dashed", "Dotted"], group = g, inline = "t240", tooltip = TT_ROW, display = display.none)
+w240 = input.int(2, "", minval = 1, maxval = 5, group = g, inline = "t240", display = display.none)
+eD = input.bool (false, "D",   group = g, inline = "tD")
+cD = input.color(#ffffff, "", group = g, inline = "tD")
+yD = input.string("Solid", "", options = ["Solid", "Dashed", "Dotted"], group = g, inline = "tD", tooltip = TT_ROW, display = display.none)
+wD = input.int(2, "", minval = 1, maxval = 5, group = g, inline = "tD", display = display.none)
+
+// ─── Labels ─────────────────────────────────────────────────────────────────
+gL = "Labels"
+TT_STYLE = "Tag: pointer and text, no fill — the original.\n\nBadge: filled pill in the line's colour, like a price tag.\n\nText only: bare text sitting on the line, no box or pointer.\n\nOff: no labels."
+TT_POS   = "Right: past the live candle, where Vrays puts its own levels.\n\nCentre / Left: on the line itself, at the middle or left edge of whatever you are looking at. These follow the view, so they stay put as you scroll."
+
+lblStyle = input.string("Tag", "Label style", options = ["Tag", "Badge", "Text only", "Off"], group = gL, tooltip = TT_STYLE, display = display.none)
+lblPos   = input.string("Right", "Position", options = ["Right", "Centre", "Left"], group = gL, tooltip = TT_POS, display = display.none)
+lblOff   = input.int(3, "Right offset (bars)", minval = 0, maxval = 50, group = gL, tooltip = "Bars past the live candle. Right position only.", display = display.none)
+lblSize  = input.string("Small", "Size", options = ["Tiny", "Small", "Normal", "Large"], group = gL, display = display.none)
+lblWhite = input.bool(false, "White text", group = gL, tooltip = "Tag and Text only draw in the line's own colour by default; tick this for white instead. Badge is always white on the line's colour.", display = display.none)
+
+chartSec = timeframe.in_seconds()
+
+// ─── Per-timeframe EMA ──────────────────────────────────────────────────────
+// Returns the line's value and its label text, since the label has to report the
+// effective length whenever the row has been rescaled to fit this chart.
+//
+// ABOVE the chart timeframe there are two honest renderings of the same EMA:
+//
+//   Stepped — the timeframe's own value, straight from its series. It changes once per
+//   HTF bar and so draws as stairs on a low chart timeframe. That is not an artifact: a
+//   5m EMA genuinely only has one new value every five minutes.
+//
+//   Smooth — the same EMA at chart resolution. A 5m EMA 200 has the time constant of a
+//   1000-length EMA of 1m bars, so run exactly that, fed by every 1m close. Same
+//   smoothing period, more input data than the stepped form rather than less, and no
+//   filter applied after the fact — nothing is averaged away.
+//
+//   The catch with the chart-resolution form on its own is warmup: 1000 bars for 5m,
+//   3000 for 15m, 12000 for 1h, against a chart that loads 5000. So it is SEEDED from
+//   the HTF series, which is already converged off its own deep history, and only then
+//   run forward on chart bars. Right value from the first bar, no warmup, no stairs.
+//
+// [1] with lookahead_on is the standard non-repainting form: the EMA through the last
+// CLOSED bar of that timeframe, never a value the chart could not have known.
+//
+// BELOW the chart timeframe there is no series to pull and no resolution to recover —
+// the detail is already gone from the candles — so the length is divided by the ratio
+// and rounded instead.
+emaFor(simple string tf, simple float tfSec, simple string name) =>
+    prev = request.security(syminfo.tickerid, tf, ta.ema(src, len)[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+
+    // This EMA's time constant expressed in chart bars, and its decay per chart bar.
+    simple float barsLen = math.max(1.0, len * tfSec / chartSec)
+    simple float a       = 2.0 / (barsLen + 1.0)
+
+    var float smooth = na
+    smooth := na(smooth) ? prev : a * src + (1.0 - a) * smooth
+
+    // Clamped at `len` so the unused branch can never ask ta.ema for a huge length.
+    simple int  downLen = math.max(1, math.min(len, int(math.round(len * tfSec / chartSec))))
+    simple bool isDown  = tfSec < chartSec
+
+    lineVal = isDown ? ta.ema(src, downLen) : (detail == "Stepped" ? prev : smooth)
+    lblTxt  = name + " " + str.tostring(len) + (isDown ? " (" + str.tostring(downLen) + ")" : "")
+    [lineVal, lblTxt]
+
+emaC = ta.ema(src, len)
+txtC = "Chart " + str.tostring(len)
+[ema1,   txt1]   = emaFor("1",   60,    "1m")
+[ema3,   txt3]   = emaFor("3",   180,   "3m")
+[ema5,   txt5]   = emaFor("5",   300,   "5m")
+[ema10,  txt10]  = emaFor("10",  600,   "10m")
+[ema15,  txt15]  = emaFor("15",  900,   "15m")
+[ema30,  txt30]  = emaFor("30",  1800,  "30m")
+[ema60,  txt60]  = emaFor("60",  3600,  "1h")
+[ema120, txt120] = emaFor("120", 7200,  "2h")
+[ema240, txt240] = emaFor("240", 14400, "4h")
+[emaD,   txtD]   = emaFor("D",   86400, "D")
+
+// A row draws if ticked — and, when it sits below the chart timeframe, only if those
+// are being scaled down rather than hidden.
+vis(simple bool on, simple float tfSec) =>
+    on and (tfSec >= chartSec or lowMode == "Scale down")
+
+var bool sC   = eC
+var bool s1   = vis(e1,   60)
+var bool s3   = vis(e3,   180)
+var bool s5   = vis(e5,   300)
+var bool s10  = vis(e10,  600)
+var bool s15  = vis(e15,  900)
+var bool s30  = vis(e30,  1800)
+var bool s60  = vis(e60,  3600)
+var bool s120 = vis(e120, 7200)
+var bool s240 = vis(e240, 14400)
+var bool sD   = vis(eD,   86400)
+
+// ─── Plots ──────────────────────────────────────────────────────────────────
+// plot() has no dashed or dotted style, so the pattern is cut into the series itself:
+// blank out a run of bars and draw with style_linebr, which breaks the line at na
+// instead of bridging the gap. Solid renders exactly as a plain line would.
+dashed(bool on, float v, simple string sty) =>
+    pattern = switch sty
+        "Dashed" => bar_index % 10 < 5
+        "Dotted" => bar_index % 4  < 2
+        => true
+    on and pattern ? v : na
+
+plot(dashed(sC,   emaC,   yC),   "Chart", color = cC,   linewidth = wC, style = plot.style_linebr)
+plot(dashed(s1,   ema1,   y1),   "1m",    color = c1,   linewidth = w1, style = plot.style_linebr)
+plot(dashed(s3,   ema3,   y3),   "3m",    color = c3,   linewidth = w3, style = plot.style_linebr)
+plot(dashed(s5,   ema5,   y5),   "5m",    color = c5,   linewidth = w5, style = plot.style_linebr)
+plot(dashed(s10,  ema10,  y10),  "10m",   color = c10,  linewidth = w10, style = plot.style_linebr)
+plot(dashed(s15,  ema15,  y15),  "15m",   color = c15,  linewidth = w15, style = plot.style_linebr)
+plot(dashed(s30,  ema30,  y30),  "30m",   color = c30,  linewidth = w30, style = plot.style_linebr)
+plot(dashed(s60,  ema60,  y60),  "1h",    color = c60,  linewidth = w60, style = plot.style_linebr)
+plot(dashed(s120, ema120, y120), "2h",    color = c120, linewidth = w120, style = plot.style_linebr)
+plot(dashed(s240, ema240, y240), "4h",    color = c240, linewidth = w240, style = plot.style_linebr)
+plot(dashed(sD,   emaD,   yD),   "D",     color = cD,   linewidth = wD, style = plot.style_linebr)
+
+// Scale anchors. A script is scaled to its own output, and a cluster of EMAs spans a far
+// narrower range than price — without these the lines get stretched to fill the pane and
+// drift against the candles as you pan. Plotting high and low invisibly makes this
+// script's range identical to the candle range, so its scale tracks the price scale.
+plot(high, "", color = color.new(color.black, 100), display = display.pane, editable = false)
+plot(low,  "", color = color.new(color.black, 100), display = display.pane, editable = false)
+
+// ─── Labels ─────────────────────────────────────────────────────────────────
+sizeOf  = lblSize == "Tiny" ? size.tiny : lblSize == "Normal" ? size.normal : lblSize == "Large" ? size.large : size.small
+// The pointer faces the line, so it flips with the side the text sits on.
+styleOf = lblStyle == "Text only" ? label.style_none : lblPos == "Left" ? label.style_label_right : lblPos == "Centre" ? label.style_label_center : label.style_label_left
+
+// Params are series, not simple: emaFor returns a tuple, and a tuple return demotes its
+// values to series. label.new takes series for all of these anyway.
+tag(bool show, float v, string txt, color col) =>
+    // Centre and Left ride the visible range rather than the data, so they stay in view
+    // while scrolling. Their y is captured as the scan passes that point — cheaper and
+    // safer than indexing back into history by a distance that changes every scroll.
+    midTime = math.round((chart.left_visible_bar_time + chart.right_visible_bar_time) / 2)
+    var float leftV = na
+    var float midV  = na
+    if time <= chart.left_visible_bar_time
+        leftV := v
+    if time <= midTime
+        midV := v
+
+    var label lb = na
+    if barstate.islast
+        label.delete(lb)
+        x = lblPos == "Left" ? chart.left_visible_bar_time : lblPos == "Centre" ? midTime : time + lblOff * chartSec * 1000
+        y = lblPos == "Left" ? leftV : lblPos == "Centre" ? midV : v
+        if show and lblStyle != "Off" and not na(y)
+            bg = lblStyle == "Badge" ? color.new(col, 10) : color.new(color.black, 100)
+            tc = lblStyle == "Badge" or lblWhite ? #ffffff : col
+            lb := label.new(x, y, txt, xloc.bar_time, yloc.price, bg, styleOf, tc, sizeOf)
+    lb
+
+tag(sC,   emaC,   txtC,   cC)
+tag(s1,   ema1,   txt1,   c1)
+tag(s3,   ema3,   txt3,   c3)
+tag(s5,   ema5,   txt5,   c5)
+tag(s10,  ema10,  txt10,  c10)
+tag(s15,  ema15,  txt15,  c15)
+tag(s30,  ema30,  txt30,  c30)
+tag(s60,  ema60,  txt60,  c60)
+tag(s120, ema120, txt120, c120)
+tag(s240, ema240, txt240, c240)
+tag(sD,   emaD,   txtD,   cD)
